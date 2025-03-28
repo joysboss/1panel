@@ -1,40 +1,30 @@
 #!/bin/bash
 
-set -euo pipefail
+# 更新数据库
+update_database() {
+  if [[ -f ${PANEL_BASE_DIR}/1panel/db/1Panel.db ]]; then
+    # 备份数据库文件
+    cp ${PANEL_BASE_DIR}/1panel/db/1Panel.db ${PANEL_BASE_DIR}/1panel/db/1Panel.db.bak
 
-function validate_version() {
-    local version=$(curl -s https://resource.fit2cloud.com/1panel/package/stable/latest)
-    if [[ -z "$version" ]]; then
-        echo "无法获取最新版本号"
-        exit 1
-    fi
-    echo "$version"
-}
-
-function backup_database() {
-    local db_file="${PANEL_BASE_DIR}/1panel/db/1Panel.db"
-    if [[ -f "$db_file" ]]; then
-        local timestamp=$(date +"%Y%m%d%H%M%S")
-        cp "$db_file" "${db_file}.bak.${timestamp}"
-    fi
-}
-
-function update_database() {
-    local version=$(validate_version)
-    local db_file="${PANEL_BASE_DIR}/1panel/db/1Panel.db"
-    
-    if [[ -f "$db_file" ]]; then
-        backup_database
-        sqlite3 "$db_file" <<EOF
+    # 使用 sqlite3 执行更新操作
+    sqlite3 ${PANEL_BASE_DIR}/1panel/db/1Panel.db <<EOF
 UPDATE settings
-SET value = '$version'
+SET value = '$(curl -s https://resource.fit2cloud.com/1panel/package/stable/latest)'
 WHERE key = 'SystemVersion';
+.exit
 EOF
-        echo "数据库版本已更新为 $version"
-    else
-        echo "数据库文件不存在: $db_file"
-        exit 1
-    fi
+
+    echo "数据库版本已更新为 $(curl -s https://resource.fit2cloud.com/1panel/package/stable/latest)"
+  else
+    echo "警告：${PANEL_BASE_DIR}/1panel/db/1Panel.db 文件不存在" >&2
+    exit 0
+  fi
 }
 
-update_database
+# 主函数
+main() {
+    update_database
+}
+
+# 调用主函数
+main

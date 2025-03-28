@@ -10,28 +10,8 @@ CURRENT_DIR=$(
     pwd
 )
 
-# 设置错误处理
-set -e
-trap 'handle_error $? $LINENO' ERR
-
-function handle_error() {
-    local exit_code=$1
-    local line_no=$2
-    log "错误发生在第 $line_no 行，退出码: $exit_code"
-    log "错误详情: $(caller)"
-    exit $exit_code
-}
-
 function log() {
-    local level="INFO"
-    if [[ $1 == "ERROR" ]]; then
-        level="ERROR"
-        shift
-    elif [[ $1 == "WARN" ]]; then
-        level="WARN"
-        shift
-    fi
-    message="[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $1"
+    message="[1Panel Log]: $1 "
     echo -e "${message}" 2>&1 | tee -a ${CURRENT_DIR}/install.log
 }
 
@@ -47,96 +27,11 @@ EOF
 
 log "======================= 开始安装 ======================="
 
-function check_architecture() {
-    osCheck=`uname -a`
-    if [[ $osCheck =~ 'x86_64' ]];then
-        architecture="amd64"
-    elif [[ $osCheck =~ 'arm64' ]] || [[ $osCheck =~ 'aarch64' ]];then
-        architecture="arm64"
-    elif [[ $osCheck =~ 'armv7l' ]];then
-        architecture="armv7"
-    elif [[ $osCheck =~ 'ppc64le' ]];then
-        architecture="ppc64le"
-    elif [[ $osCheck =~ 's390x' ]];then
-        architecture="s390x"
-    else
-        log "ERROR" "暂不支持的系统架构，请参阅官方文档，选择受支持的系统。"
-        exit 1
-    fi
-    log "检测到系统架构: $architecture"
-}
-
-function check_install_mode() {
-    if [[ ! ${INSTALL_MODE} ]];then
-        INSTALL_MODE="stable"
-    else
-        if [[ ${INSTALL_MODE} != "dev" && ${INSTALL_MODE} != "stable" ]];then
-            log "ERROR" "请输入正确的安装模式（dev or stable）"
-            exit 1
-        fi
-    fi
-    log "安装模式: $INSTALL_MODE"
-}
-
-function download_package() {
-    VERSION=$(curl -s https://resource.fit2cloud.com/1panel/package/${INSTALL_MODE}/latest)
-    if [[ "x${VERSION}" == "x" ]];then
-        log "ERROR" "获取最新版本失败，请稍候重试"
-        exit 1
-    fi
-
-    package_file_name="1panel-${VERSION}-linux-${architecture}.tar.gz"
-    package_download_url="https://resource.fit2cloud.com/1panel/package/${INSTALL_MODE}/${VERSION}/release/${package_file_name}"
-    HASH_FILE_URL="https://resource.fit2cloud.com/1panel/package/${INSTALL_MODE}/${VERSION}/release/checksums.txt"
-    expected_hash=$(curl -s "$HASH_FILE_URL" | grep "$package_file_name" | awk '{print $1}')
-
-    if [ -f ${package_file_name} ];then
-        actual_hash=$(sha256sum "$package_file_name" | awk '{print $1}')
-        if [[ "$expected_hash" == "$actual_hash" ]];then
-            log "安装包已存在且哈希值验证通过，跳过下载"
-            return 0
-        else
-            log "WARN" "已存在安装包，但是哈希值不一致，开始重新下载"
-            rm -f ${package_file_name}
-        fi
-    fi
-
-    log "开始下载 1Panel ${VERSION} 版本在线安装包"
-    log "安装包下载地址： ${package_download_url}"
-
-    curl -LOk -o ${package_file_name} ${package_download_url}
-    if [ ! -f ${package_file_name} ];then
-        log "ERROR" "下载安装包失败，请稍候重试。"
-        exit 1
-    fi
-
-    actual_hash=$(sha256sum "$package_file_name" | awk '{print $1}')
-    if [[ "$expected_hash" != "$actual_hash" ]];then
-        log "ERROR" "下载的安装包哈希值验证失败，请稍候重试。"
-        rm -f ${package_file_name}
-        exit 1
-    fi
-
-    log "安装包下载完成且哈希值验证通过"
-    return 0
-}
-
 function Prepare_System(){
-    # 检查是否真正安装（通过检查数据库文件）
-    if [[ -f "${PANEL_BASE_DIR}/db/1Panel.db" ]] && [[ -s "${PANEL_BASE_DIR}/db/1Panel.db" ]]; then
-        if [[ "${FORCE_INSTALL}" == "true" ]]; then
-            log "检测到已安装的1Panel，将进行强制重新安装"
-            rm -f /usr/local/bin/1panel /usr/bin/1panel
-            rm -f /usr/local/bin/1pctl /usr/bin/1pctl
-            rm -rf ${PANEL_BASE_DIR}/data/*
-            rm -rf ${PANEL_BASE_DIR}/logs/*
-            rm -rf ${PANEL_BASE_DIR}/db/*
-        else
-            log "1Panel Linux 服务器运维管理面板已安装，请勿重复安装"
-            1panel
-        fi
-    else
-        log "未检测到已安装的1Panel，开始安装"
+    if which 1panel >/dev/null 2>&1; then
+        log "1Panel Linux 服务器运维管理面板已安装，请勿重复安装"
+        #exit 1
+        1panel
     fi
 }
 
@@ -145,6 +40,84 @@ function Set_Dir(){
         PANEL_BASE_DIR=${PANEL_BASE_DIR:-$DEFAULT_BASE_DIR}
         mkdir -p $PANEL_BASE_DIR
         log "安装路径已设置为 $PANEL_BASE_DIR"
+    fi
+
+}
+
+function Install_Docker(){
+    if which docker >/dev/null 2>&1; then
+        log "检测到 Docker 已安装，跳过安装步骤"
+        log "启动 Docker "
+        systemctl start docker 2>&1 | tee -a ${CURRENT_DIR}/install.log
+    else
+        log "... 在线安装 docker"
+
+        curl -fsSL https://get.docker.com -o get-docker.sh 2>&1 | tee -a ${CURRENT_DIR}/install.log
+        if [[ ! -f get-docker.sh ]];then
+            log "docker 在线安装脚本下载失败，请稍候重试"
+            exit 1
+        fi
+        if [[ $(curl -s ipinfo.io/country) == "CN" ]]; then
+            sh get-docker.sh --mirror Aliyun 2>&1 | tee -a ${CURRENT_DIR}/install.log
+        else
+            sh get-docker.sh 2>&1 | tee -a ${CURRENT_DIR}/install.log
+        fi
+        
+        log "... 启动 docker"
+        systemctl enable docker; systemctl daemon-reload; systemctl start docker 2>&1 | tee -a ${CURRENT_DIR}/install.log
+
+        docker_config_folder="/etc/docker"
+        if [[ ! -d "$docker_config_folder" ]];then
+            mkdir -p "$docker_config_folder"
+        fi
+
+        docker version >/dev/null 2>&1
+        if [[ $? -ne 0 ]]; then
+            log "docker 安装失败"
+            exit 1
+        else
+            log "docker 安装成功"
+        fi
+    fi
+}
+
+function Install_Compose(){
+    docker-compose version >/dev/null 2>&1
+    if [[ $? -ne 0 ]]; then
+        log "... 在线安装 docker-compose"
+        
+        arch=$(uname -m)
+		if [ "$arch" == 'armv7l' ]; then
+			arch='armv7'
+		fi
+		curl -L https://resource.fit2cloud.com/docker/compose/releases/download/v2.16.0/docker-compose-$(uname -s | tr A-Z a-z)-$arch -o /usr/local/bin/docker-compose 2>&1 | tee -a ${CURRENT_DIR}/install.log
+        if [[ ! -f /usr/local/bin/docker-compose ]];then
+            log "docker-compose 下载失败，请稍候重试"
+            exit 1
+        fi
+        chmod +x /usr/local/bin/docker-compose
+        ln -s /usr/local/bin/docker-compose /usr/bin/docker-compose
+
+        docker-compose version >/dev/null 2>&1
+        if [[ $? -ne 0 ]]; then
+            log "docker-compose 安装失败"
+            exit 1
+        else
+            log "docker-compose 安装成功"
+        fi
+    else
+        compose_v=`docker-compose -v`
+        if [[ $compose_v =~ 'docker-compose' ]];then
+            read -p "检测到已安装 Docker Compose 版本较低（需大于等于 v2.0.0 版本），是否升级 [y/n] : " UPGRADE_DOCKER_COMPOSE
+            if [[ "$UPGRADE_DOCKER_COMPOSE" == "Y" ]] || [[ "$UPGRADE_DOCKER_COMPOSE" == "y" ]]; then
+                rm -rf /usr/local/bin/docker-compose /usr/bin/docker-compose
+                Install_Compose
+            else
+                log "Docker Compose 版本为 $compose_v，可能会影响应用商店的正常使用"
+            fi
+        else
+            log "检测到 Docker Compose 已安装，跳过安装步骤"
+        fi
     fi
 }
 
@@ -184,6 +157,7 @@ function Set_Password(){
     PANEL_PASSWORD=${PANEL_PASSWORD:-$DEFAULT_PASSWORD}
 }
 
+
 function Init_Panel(){
     log "配置 1Panel Service"
 
@@ -208,6 +182,26 @@ function Init_Panel(){
     if [[ ! -f /usr/bin/1pctl ]]; then
         ln -s /usr/local/bin/1pctl /usr/bin/1pctl >/dev/null 2>&1
     fi
+
+    # cp ./1panel.service /etc/systemd/system
+	# 
+    # systemctl enable 1panel; systemctl daemon-reload 2>&1 | tee -a ${CURRENT_DIR}/install.log
+	# 
+    # log "启动 1Panel 服务"
+    # systemctl start 1panel | tee -a ${CURRENT_DIR}/install.log
+	# 
+    # for b in {1..30}
+    # do
+    #     sleep 3
+    #     service_status=`systemctl status 1panel 2>&1 | grep Active`
+    #     if [[ $service_status == *running* ]];then
+    #         log "1Panel 服务启动成功!"
+    #         break;
+    #     else
+    #         log "1Panel 服务启动出错!"
+    #         exit 1
+    #     fi
+    # done
 }
 
 function Show_Result(){
@@ -229,18 +223,15 @@ function Show_Result(){
 }
 
 function main(){
-    check_architecture
-    check_install_mode
     Prepare_System
     Set_Dir
+#   Install_Docker
+#   Install_Compose
     Set_Port
     Set_Firewall
     Set_Username
     Set_Password
-    download_package
     Init_Panel
     Show_Result
 }
-
 main
-
