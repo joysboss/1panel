@@ -1,1 +1,18 @@
-
+version: '3'
+services:
+  1panel:
+    image: sunnas/1panel:latest
+    container_name: 1panel
+    restart: always
+    ports:
+      - "10086:10086"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+      - /home/1panel/opt/:/opt
+      - /root:/root
+    environment:
+      - TZ=Asia/Shanghai
+      - PANEL_ENTRANCE=sunnas
+      - PANEL_USERNAME=admin
+      - PANEL_PASSWORD=sun@891026
